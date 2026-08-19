@@ -1,0 +1,46 @@
+name: 每日监控
+
+on:
+  schedule:
+    # 17:30 北京时间 (UTC+8) = 09:30 UTC, 周一至周五 (期货结算 + A股收盘后)
+    - cron: "30 9 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "回填指定日期,空格分隔 (YYYY-MM-DD),留空则抓最新一天"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: 抓数 + 算闸门
+        env:
+          DATES: ${{ github.event.inputs.dates }}
+        run: python monitor.py $DATES
+
+      - name: 提交快照
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --staged --quiet || git commit -m "chore: 快照更新 $(date -u +%F)"
+          git push

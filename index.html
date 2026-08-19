@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>资源股滞后套利监控</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin:0; padding:0; background:#F4F2EC; }
+  * { box-sizing:border-box; }
+  body { font-family:'IBM Plex Sans','Noto Sans SC',sans-serif; color:#1E241C; }
+  .mono { font-family:'IBM Plex Mono',monospace; }
+  ::-webkit-scrollbar { width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb { background:#DCD7CB; border-radius:8px; }
+  @keyframes sig { 0%,100%{opacity:1} 50%{opacity:.35} }
+  .app { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+  .masterbar { flex:none; display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:13px 24px; border-bottom:1px solid; }
+  .datebar { flex:none; display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 24px; background:#fff; border-bottom:1px solid #E5E1D8; }
+  .main { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); }
+  .left { display:flex; flex-direction:column; min-width:0; overflow-y:auto; padding:18px 22px 28px 24px; gap:11px; }
+  .right { display:flex; flex-direction:column; min-width:0; overflow-y:auto; gap:11px; padding:18px 24px 28px 20px; background:#FFFDF8; border-left:1px solid #E5E1D8; }
+  .chip { padding:4px 9px; border-radius:6px; cursor:pointer; font-size:11.5px; border:1px solid #E5E1D8; }
+  .chip:hover { border-color:#C4BFAF; }
+  .tab { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:8px; cursor:pointer; border:1px solid; }
+  .tab:hover { border-color:#C4BFAF; }
+  .stockrow { display:grid; grid-template-columns:minmax(96px,1fr) 62px 64px 66px; gap:8px; align-items:center; padding:11px 13px; border-radius:9px; cursor:pointer; border:1px solid; }
+  .stockrow:hover { border-color:#C4BFAF; }
+  .gate { display:grid; grid-template-columns:20px minmax(0,1fr) auto; gap:10px; align-items:center; padding:10px 13px; border-radius:9px; border:1px solid; }
+  .lbl { font-size:10px; color:#8A8E82; }
+  .navbtn { width:24px; height:24px; display:flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; border:1px solid #E5E1D8; font-size:12px; color:#5F6359; background:#FBFAF6; }
+  .navbtn:hover { background:#F1EFE7; }
+</style>
+</head>
+<body>
+<div class="app" id="app"><div style="padding:40px;color:#8A8E82">加载中 … (需通过 http 服务访问, 如: python3 -m http.server)</div></div>
+<script>
+const G = {
+  pass:{c:'#2F6B52',b:'#EAF2EC',br:'#CBE0D2',s:'通过'},
+  fail:{c:'#A8443C',b:'#F8ECE9',br:'#E8CFC9',s:'不通过'},
+  na:  {c:'#B0762A',b:'#F7F0E2',br:'#E7D8BC',s:'免检'},
+  nd:  {c:'#8E5F1F',b:'#F7F0E2',br:'#E7D8BC',s:'缺数据'},
+  skip:{c:'#9A9E92',b:'#F2F0EA',br:'#E5E1D8',s:'未检查'}
+};
+const GRADE = { S:'#2F6B52', A:'#8E5F1F', B:'#5A6270' };
+const EXITS = [
+  { text:'买入 5 个交易日后，股价涨幅仍 < 2% → 全部清仓', tag:'信号失效', color:'#A8443C' },
+  { text:'股价浮盈 10% → 卖出 1/3', tag:'第一批', color:'#B0762A' },
+  { text:'股价浮盈 20% → 再卖出 1/3', tag:'第二批', color:'#B0762A' },
+  { text:'剩余 1/3 不设目标价，破 60 日线或股商比价回均值 → 清仓', tag:'趋势离场', color:'#2F6B52' },
+  { text:'任何时候商品价跌破 60 日均线 → 无条件清仓', tag:'铁律', color:'#A8443C' }
+];
+const S = { dates:[], di:0, snap:null, ci:0, si:0, exp:{} };
+window.toggleGate = no => { S.exp[no] = !S.exp[no]; render(); };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const okSt = g => g.st === 'pass' || g.st === 'na';
+const gatesPass = (v, s) => v.gates.every(okSt) && (s.gates || []).length > 0 && s.gates.every(okSt);
+const pct = v => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(1) + '%';
+
+async function load() {
+  S.dates = await (await fetch('data/index.json')).json();
+  await loadDay(0);
+}
+async function loadDay(i) {
+  S.di = i; S.ci = Math.min(S.ci, 99);
+  S.snap = await (await fetch('data/' + S.dates[i] + '.json')).json();
+  S.ci = 0; S.si = 0;
+  render();
+}
+function sparkline(d) {
+  const vals = d.series.map(p => p[1]);
+  const min = Math.min(...vals), max = Math.max(...vals), n = vals.length;
+  const pts = d.series.map((p, i) =>
+    `${(n > 1 ? i / (n - 1) * 100 : 50).toFixed(1)},${(37 - (p[1] - min) / (max - min || 1) * 32).toFixed(1)}`).join(' ');
+  const up = vals[n-1] >= vals[0];
+  return `<svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
+    <polyline points="${pts}" fill="none" stroke="${up ? '#2F6B52' : '#A8443C'}" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function detailView(g) {
+  const d = g.detail;
+  const row = cells => `<div style="display:flex;gap:10px;justify-content:space-between;font-size:11px;padding:2px 0">${cells}</div>`;
+  const mono = (v, c) => `<span class="mono" style="${c ? 'color:' + c : ''}">${esc(v)}</span>`;
+  let body = '';
+  if (d.type === 'series') {
+    const chg = (d.last[1] / d.base[1] - 1) * 100;
+    body = sparkline(d) + row(`<span style="color:#8A8E82">${d.base[0]} 基准 ${mono(d.base[1])}</span>
+      <span style="color:#8A8E82">${d.last[0]} 现价 ${mono(d.last[1])}</span>
+      ${mono(pct(chg), chg >= 0 ? '#2F6B52' : '#A8443C')}`);
+  } else if (d.type === 'basis') {
+    body = [
+      row(`<span style="color:#8A8E82">现货价</span>${mono(d.spot)}`),
+      row(`<span style="color:#8A8E82">近月 ${esc(d.near)}</span>${mono(d.near_price)}`),
+      row(`<span style="color:#8A8E82">远月/主力 ${esc(d.dom)}</span>${mono(d.dom_price)}`),
+      row(`<span style="color:#8A8E82">近月−远月</span>${mono((d.near_price - d.dom_price).toFixed(1),
+        d.near_price - d.dom_price > 0 ? '#2F6B52' : '#A8443C')}`),
+      `<div style="font-size:10px;color:#B0AB9E;padding-top:2px">生意社期现表 · ${esc(d.date)}</div>`
+    ].join('');
+  } else if (d.type === 'weekly') {
+    const gr = cells => `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px;padding:2px 0;text-align:right">${cells}</div>`;
+    body = gr(`<span style="color:#8A8E82;text-align:left">周止</span><span style="color:#8A8E82">库存</span><span style="color:#8A8E82">周变化</span>`) +
+      d.rows.map(r => gr(`<span class="mono" style="text-align:left">${r[0]}</span>${mono(r[1].toLocaleString())}${r[2] == null ? '<span>—</span>'
+        : mono((r[2] >= 0 ? '+' : '') + r[2].toLocaleString(), r[2] < 0 ? '#2F6B52' : '#A8443C')}`)).join('');
+  } else if (d.type === 'daily') {
+    const gr = cells => `<div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr 1fr;gap:6px;font-size:11px;padding:2px 0;text-align:right">${cells}</div>`;
+    body = gr(`<span style="color:#8A8E82;text-align:left">日期</span><span style="color:#8A8E82">收盘</span><span style="color:#8A8E82">涨跌</span><span style="color:#8A8E82">持仓</span><span style="color:#8A8E82">增仓</span>`) +
+      d.rows.map(r => {
+        const hit = r[2] > 0 && r[4] > 0;
+        return gr(`<span class="mono" style="text-align:left">${r[0]}</span>${mono(r[1])}${mono((r[2] >= 0 ? '+' : '') + r[2], r[2] >= 0 ? '#2F6B52' : '#A8443C')}${mono(r[3].toLocaleString())}${mono((r[4] >= 0 ? '+' : '') + r[4].toLocaleString(), hit ? '#2F6B52' : '#8A8E82')}`);
+      }).join('') +
+      `<div style="font-size:10px;color:#B0AB9E;padding-top:2px">绿色增仓 = 收涨且增仓,计入天数</div>`;
+  } else if (d.type === 'worst') {
+    body = row(`<span style="color:#8A8E82">30日内最大单日跌幅</span>`) +
+      d.rows.map(r => row(`${mono(r[0])}${mono('收盘 ' + r[2])}${mono(pct(r[1]), r[1] <= -5 ? '#A8443C' : '#5F6359')}`)).join('');
+  }
+  return `<div style="grid-column:1/-1;border-top:1px dashed rgba(0,0,0,.08);margin-top:8px;padding-top:8px">${body}</div>`;
+}
+function gateView(g) {
+  const t = G[g.st];
+  const has = !!g.detail, open = has && S.exp[g.no];
+  return `<div class="gate" ${has ? `onclick="toggleGate('${g.no}')" style="cursor:pointer;` : 'style="'}background:${t.b};border-color:${t.br}">
+    <div style="font-size:13.5px;font-weight:600;color:${t.c}">${g.no}</div>
+    <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+      <div style="font-size:13px;font-weight:600">${esc(g.title)}</div>
+      <div style="font-size:11px;color:#83877B">${esc(g.rule)}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span class="mono" style="font-size:13.5px;font-weight:600;color:${t.c}">${esc(g.value)}</span>
+      <span style="min-width:50px;text-align:center;padding:3px 7px;border-radius:5px;font-size:10.5px;font-weight:600;background:#fff;border:1px solid ${t.br};color:${t.c}">${t.s}</span>
+      ${has ? `<span style="font-size:9px;color:#9A9E92">${open ? '▲' : '▼'}</span>` : ''}
+    </div>${open ? detailView(g) : ''}</div>`;
+}
+function render() {
+  const snap = S.snap, m = snap.master, on = m.on;
+  const pool = snap.varieties;
+  const v = pool[Math.min(S.ci, pool.length-1)];
+  const st = v.stocks[Math.min(S.si, v.stocks.length-1)] || {};
+  const allGates = [...v.gates, ...(st.gates || [])];
+  const passN = allGates.filter(g => g.st === 'pass' || g.st === 'na').length;
+  const hasNd = allGates.some(g => g.st === 'nd');
+  const isSig = !!st.signal;
+  const failG = allGates.find(g => g.st === 'fail');
+  const stockTotal = pool.reduce((a,g) => a + g.stocks.length, 0);
+  const gatesAllPass = passN === 6 && !hasNd;
+  const chip = failG ? G.fail : hasNd ? G.nd : gatesAllPass ? G.pass : G.fail;
+  const mc = on ? {bg:'#EAF2EC',br:'#CBE0D2',c:'#2F6B52',title:'商品指数运行于 MA200 上方 · 系统开启',state:'开启'}
+               : {bg:'#F2F0EA',br:'#E0DBD0',c:'#8A8E82',title:'商品指数跌破 MA200 · 今日不运行',state:'关闭'};
+  const spread = (v.meta && v.meta.c30 != null && st.s30 != null) ? (v.meta.c30 - st.s30).toFixed(1) + ' pt' : '—';
+  const concl = !on
+    ? {bg:'#F2F0EA',br:'#E0DBD0',c:'#6E7268',title:'总开关关闭 · ' + snap.date + ' 不产生信号',
+       detail:'商品指数处于 MA200 下方，视为熊市反弹，当日全部品种不产生信号。闸门检查照常执行：该标的 ' + passN + '/6 通过' +
+         (gatesAllPass ? '，若总开关开启即触发信号。' : (failG ? '，「' + failG.title + '」未满足。' : '。'))}
+    : isSig
+      ? {bg:'#EEF4E6',br:'#D2E0C0',c:'#3F6B2A',title:'✓ 信号触发 · 次日开盘买入 ' + v.cap,
+         detail:`${v.name} 30日涨 ${pct(v.meta.c30)}，${st.name} 仅涨 ${pct(st.s30)}，滞后差 ${spread}。按 ${v.grade} 级上限 ${v.cap} 建仓，不追高。`}
+      : hasNd && !failG
+        ? {bg:'#F7F0E2',br:'#E7D8BC',c:'#8E5F1F',title:'数据缺失 · 无法判定',
+           detail:'部分闸门缺少数据（现货品种需手工维护 30 日涨幅，见 config.json 的 manual_c30），本品种不产生信号。'}
+        : {bg:'#F8ECE9',br:'#E8CFC9',c:'#A8443C',title:'跳过 · ' + passN + '/6 通过',
+           detail: failG ? `「${failG.title}」未满足：${failG.rule}，实测 ${failG.value}。` +
+             ('①③④⑤'.includes(failG.no) ? '品种级不通过，该品种下全部标的一并跳过。' : '品种条件已过，但该标的个股级不通过，可看同品种其他标的。') : '条件未全部满足。'};
+
+  document.getElementById('app').innerHTML = `
+  <div class="masterbar" style="background:${mc.bg};border-color:${mc.br}">
+    <div style="display:flex;align-items:center;gap:12px;min-width:0">
+      <span style="width:9px;height:9px;border-radius:50%;flex:none;background:${mc.c}"></span>
+      <div style="display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden">
+        <div style="font-size:10.5px;letter-spacing:.12em;color:#7A7E72">总开关 · 盘面级环境判断</div>
+        <div style="font-size:15px;font-weight:700;color:${mc.c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${mc.title}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-left:auto">
+      <div><div class="lbl">中证商品指数</div><div class="mono" style="font-size:14px;font-weight:600">${m.index}</div></div>
+      <div><div class="lbl">MA200</div><div class="mono" style="font-size:14px;font-weight:600">${m.ma200}</div></div>
+      <div><div class="lbl">偏离</div><div class="mono" style="font-size:14px;font-weight:600;color:${mc.c}">${pct(m.dev_pct)}</div></div>
+      <div style="padding:5px 13px;border-radius:20px;font-size:12.5px;font-weight:700;background:#fff;border:1px solid ${mc.br};color:${mc.c}">${mc.state}</div>
+    </div>
+  </div>
+  <div class="datebar">
+    <span style="font-size:10.5px;letter-spacing:.1em;color:#8A8E82">快照日期</span>
+    <div style="display:flex;align-items:center;gap:4px">
+      <div class="navbtn" onclick="if(S.di<S.dates.length-1)loadDay(S.di+1)">◀</div>
+      <span class="mono" style="min-width:96px;text-align:center;font-size:13.5px;font-weight:600">${snap.date}</span>
+      <div class="navbtn" onclick="if(S.di>0)loadDay(S.di-1)">▶</div>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap">${S.dates.slice(0,8).map((d,i) => `
+      <div class="chip mono" onclick="loadDay(${i})" style="background:${i===S.di?'#EAF2EC':'#FBFAF6'};border-color:${i===S.di?'#B9CFC0':'#E5E1D8'};color:${i===S.di?'#2F6B52':'#6E7268'}">${d.slice(5)}</div>`).join('')}
+    </div>
+    <span style="margin-left:auto;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;${S.di===0
+      ? 'background:#EAF2EC;border:1px solid #CBE0D2;color:#2F6B52">最新收盘快照'
+      : 'background:#F7F0E2;border:1px solid #E7D8BC;color:#8E5F1F">历史快照 · 只读'}</span>
+  </div>
+  <div class="main">
+    <div class="left">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <div style="font-size:15px;font-weight:700">品种池 · ${pool.length} 个品种 / ${stockTotal} 只标的</div>
+        <div style="font-size:11.5px;color:#8A8E82">触发信号 ${snap.signals.length}</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;padding-bottom:11px;border-bottom:1px solid #E5E1D8">${pool.map((g,ci) => `
+        <div class="tab" onclick="S.ci=${ci};S.si=0;render()" style="background:${ci===S.ci?'#fff':'#F7F5EF'};border-color:${ci===S.ci?'#B9CFC0':'#E9E5DC'};box-shadow:${ci===S.ci?'0 4px 14px -10px rgba(30,36,28,.4)':'none'}">
+          <span style="font-size:13px;font-weight:600;white-space:nowrap">${g.name}</span>
+          <span class="mono" style="font-size:11px;color:${g.meta && g.meta.c30 > 15 ? '#2F6B52' : '#9A9E92'}">${g.meta && g.meta.c30 != null ? pct(g.meta.c30) : '缺'}</span>
+        </div>`).join('')}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 13px;border-radius:9px;background:#F7F5EF;border:1px solid #E9E5DC">
+        <span style="padding:2px 8px;border-radius:5px;font-size:10.5px;font-weight:700;background:#fff;border:1px solid #E5E1D8;color:${GRADE[v.grade]}">${v.grade} 级</span>
+        <span style="font-size:15px;font-weight:700">${v.name}</span>
+        <span class="mono" style="font-size:11px;color:#8A8E82">${v.spot ? esc(v.spot_desc) : esc(v.futures)}</span>
+        <div style="display:flex;align-items:center;gap:18px;margin-left:auto;flex-wrap:wrap">
+          <div><div class="lbl">商品30日</div><div class="mono" style="font-size:13.5px;font-weight:600;color:${v.meta && v.meta.c30 > 15 ? '#2F6B52' : '#83877B'}">${v.meta && v.meta.c30 != null ? pct(v.meta.c30) : '缺数据'}</div></div>
+          <div><div class="lbl">标的数</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.stocks.length}</div></div>
+          <div><div class="lbl">仓位上限</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.cap}</div></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:minmax(96px,1fr) 62px 64px 66px;gap:8px;padding:2px 13px 0;font-size:10px;color:#8A8E82;letter-spacing:.06em">
+        <div>${v.name} 板块个股</div><div style="text-align:right">现价</div><div style="text-align:right">今日</div><div style="text-align:right">30日涨幅</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px">${v.stocks.map((s,si) => `
+        <div class="stockrow" onclick="S.si=${si};render()" style="background:${si===S.si?'#fff':'#FBFAF6'};border-color:${si===S.si?'#B9CFC0':'#E9E5DC'};box-shadow:${si===S.si?'0 6px 18px -12px rgba(30,36,28,.28)':'none'}">
+          <div style="display:flex;align-items:center;gap:8px;min-width:0">
+            <span style="font-size:13.5px;font-weight:600;white-space:nowrap">${s.name}</span>
+            <span class="mono" style="font-size:10.5px;color:#9A9E92;white-space:nowrap">${s.code}</span>
+            ${si===0 ? '<span style="flex:none;padding:1px 5px;border-radius:4px;font-size:9.5px;font-weight:600;background:#F1EFE7;color:#7A7E72">龙头</span>' : ''}
+            ${s.signal ? '<span style="width:6px;height:6px;border-radius:50%;flex:none;background:#2F6B52;animation:sig 1.8s ease-in-out infinite"></span>'
+              : gatesPass(v, s) ? '<span title="闸门全过,待总开关开启" style="width:6px;height:6px;border-radius:50%;flex:none;background:#9A9E92"></span>' : ''}
+          </div>
+          <div class="mono" style="text-align:right;font-size:13.5px">${s.price != null ? s.price.toFixed(2) : '—'}</div>
+          <div class="mono" style="text-align:right;font-size:12.5px;color:${s.chg_pct < 0 ? '#A8443C' : '#2F6B52'}">${pct(s.chg_pct)}</div>
+          <div class="mono" style="text-align:right;font-size:12.5px">${pct(s.s30)}</div>
+        </div>`).join('')}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px;padding-top:4px;font-size:11px;color:#8A8E82">
+        <span>绿点为该日触发信号的标的；灰点为闸门全过、仅待总开关开启；明细见右侧</span>
+        <span>动力煤、螺纹钢等政策敏感品种不纳入池；同品种优先取 30 日涨幅最小者</span>
+      </div>
+    </div>
+    <div class="right">
+      <div style="padding:13px 16px;border-radius:10px;background:#fff;border:1px solid #E5E1D8;display:flex;flex-direction:column;gap:9px">
+        <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+          <span style="font-size:16px;font-weight:700">${st.name || ''}</span>
+          <span class="mono" style="font-size:11.5px;color:#9A9E92">${st.code || ''}</span>
+          <span style="font-size:11.5px;color:#8A8E82">${v.name} · ${v.spot ? esc(v.spot_desc) : esc(v.futures)}</span>
+          <span class="mono" style="margin-left:auto;padding:4px 11px;border-radius:20px;font-size:12px;font-weight:600;background:${chip.b};color:${chip.c}">${passN}/6</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;padding-top:8px;border-top:1px dashed #E5E1D8">
+          <div><div class="lbl">商品30日 / 股价30日</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.meta && v.meta.c30 != null ? pct(v.meta.c30) : '—'} / ${pct(st.s30)}</div></div>
+          <div><div class="lbl">滞后差</div><div class="mono" style="font-size:13.5px;font-weight:600">${spread}</div></div>
+          <div><div class="lbl">仓位上限</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.cap}</div></div>
+        </div>
+      </div>
+      <div style="font-size:10.5px;letter-spacing:.1em;color:#7A7E72;padding:2px 2px 0">品种级闸门 · 商品 / 现货 / 库存 / 资金</div>
+      <div style="display:flex;flex-direction:column;gap:6px">${v.gates.map(gateView).join('')}</div>
+      <div style="font-size:10.5px;letter-spacing:.1em;color:#7A7E72;padding:6px 2px 0">个股级闸门 · ${st.name || ''}</div>
+      <div style="display:flex;flex-direction:column;gap:6px">${(st.gates || []).map(gateView).join('')}</div>
+      <div style="padding:14px 16px;border-radius:10px;background:${concl.bg};border:1px solid ${concl.br};display:flex;flex-direction:column;gap:5px">
+        <div style="font-size:14px;font-weight:700;color:${concl.c}">${concl.title}</div>
+        <div style="font-size:12px;color:#5F6359;line-height:1.6">${concl.detail}</div>
+      </div>
+      ${isSig ? `<div style="padding:14px 16px;border-radius:10px;background:#fff;border:1px solid #E5E1D8;display:flex;flex-direction:column;gap:9px">
+        <div style="font-size:10.5px;letter-spacing:.1em;color:#7A7E72">后续监控清单</div>
+        ${EXITS.map(e => `<div style="display:flex;align-items:baseline;gap:9px">
+          <span style="width:3px;height:3px;border-radius:50%;flex:none;margin-top:7px;background:${e.color}"></span>
+          <span style="font-size:12px;color:#3E4239;line-height:1.55">${e.text}</span>
+          <span class="mono" style="margin-left:auto;font-size:11px;color:${e.color};white-space:nowrap">${e.tag}</span>
+        </div>`).join('')}
+      </div>` : ''}
+      <div style="font-size:10.5px;color:#B0AB9E;padding:2px">快照生成于 ${esc(snap.generated_at)} · 数据: 中证商品指数 / 新浪期货 / 生意社期现 / 东财库存·A股</div>
+    </div>
+  </div>`;
+}
+load().catch(e => {
+  document.getElementById('app').innerHTML = '<div style="padding:40px;color:#A8443C">加载失败: ' + esc(e.message) +
+    '<br><br>请先运行 <code>python monitor.py</code> 生成数据，并通过 <code>python3 -m http.server</code> 打开本页。</div>';
+});
+</script>
+</body>
+</html>

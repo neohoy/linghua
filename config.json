@@ -1,0 +1,104 @@
+{
+  "master": {
+    "index_name": "中证商品期货指数",
+    "ma_window": 200
+  },
+  "rules": {
+    "lookback_calendar_days": 30,
+    "c30_threshold": 15.0,
+    "s30_threshold": 5.0,
+    "inv_down_weeks": 2,
+    "oi_up_days": 3,
+    "oi_window_days": 5,
+    "max_single_drop": -5.0
+  },
+  "notify": {
+    "bark_url": "",
+    "serverchan_key": ""
+  },
+  "pool": [
+    {
+      "name": "碳酸锂", "futures": "LC", "sina_main": "LC0", "inventory_em": "碳酸锂",
+      "grade": "S", "cap": "25%", "spot": false,
+      "stocks": [
+        {"name": "赣锋锂业", "code": "002460"},
+        {"name": "天齐锂业", "code": "002466"},
+        {"name": "盐湖股份", "code": "000792"},
+        {"name": "中矿资源", "code": "002738"},
+        {"name": "永兴材料", "code": "002756"},
+        {"name": "雅化集团", "code": "002497"}
+      ]
+    },
+    {
+      "name": "稀土", "futures": null, "spot": true, "spot_desc": "氧化镨钕现货",
+      "grade": "S", "cap": "25%", "manual_c30": null,
+      "stocks": [
+        {"name": "北方稀土", "code": "600111"},
+        {"name": "中国稀土", "code": "000831"},
+        {"name": "盛和资源", "code": "600392"},
+        {"name": "广晟有色", "code": "600259"},
+        {"name": "厦门钨业", "code": "600549"}
+      ]
+    },
+    {
+      "name": "纯碱", "futures": "SA", "sina_main": "SA0", "inventory_em": "纯碱",
+      "grade": "A", "cap": "20%", "spot": false,
+      "stocks": [
+        {"name": "远兴能源", "code": "000683"},
+        {"name": "山东海化", "code": "000822"},
+        {"name": "三友化工", "code": "600409"},
+        {"name": "双环科技", "code": "000707"}
+      ]
+    },
+    {
+      "name": "黄磷", "futures": null, "spot": true, "spot_desc": "黄磷现货",
+      "grade": "A", "cap": "20%", "manual_c30": null,
+      "stocks": [
+        {"name": "兴发集团", "code": "600141"},
+        {"name": "云天化", "code": "600096"},
+        {"name": "川恒股份", "code": "002895"},
+        {"name": "川发龙蟒", "code": "002312"}
+      ]
+    },
+    {
+      "name": "MDI", "futures": null, "spot": true, "spot_desc": "MDI 现货",
+      "grade": "A", "cap": "20%", "manual_c30": null,
+      "stocks": [
+        {"name": "万华化学", "code": "600309"},
+        {"name": "沧州大化", "code": "600230"}
+      ]
+    },
+    {
+      "name": "铜", "futures": "CU", "sina_main": "CU0", "inventory_em": "沪铜",
+      "grade": "B", "cap": "15%", "spot": false,
+      "stocks": [
+        {"name": "紫金矿业", "code": "601899"},
+        {"name": "江西铜业", "code": "600362"},
+        {"name": "铜陵有色", "code": "000630"},
+        {"name": "云南铜业", "code": "000878"},
+        {"name": "洛阳钼业", "code": "603993"}
+      ]
+    },
+    {
+      "name": "铝", "futures": "AL", "sina_main": "AL0", "inventory_em": "沪铝",
+      "grade": "B", "cap": "15%", "spot": false,
+      "stocks": [
+        {"name": "云铝股份", "code": "000807"},
+        {"name": "中国铝业", "code": "601600"},
+        {"name": "神火股份", "code": "000933"},
+        {"name": "天山铝业", "code": "002532"},
+        {"name": "南山铝业", "code": "600219"}
+      ]
+    },
+    {
+      "name": "锌", "futures": "ZN", "sina_main": "ZN0", "inventory_em": "沪锌",
+      "grade": "B", "cap": "15%", "spot": false,
+      "stocks": [
+        {"name": "驰宏锌锗", "code": "600497"},
+        {"name": "中金岭南", "code": "000060"},
+        {"name": "西藏珠峰", "code": "600338"},
+        {"name": "株冶集团", "code": "600961"}
+      ]
+    }
+  ]
+}

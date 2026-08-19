@@ -30,6 +30,49 @@
   .lbl { font-size:10px; color:#8A8E82; }
   .navbtn { width:24px; height:24px; display:flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; border:1px solid #E5E1D8; font-size:12px; color:#5F6359; background:#FBFAF6; }
   .navbtn:hover { background:#F1EFE7; }
+  .masterstats { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-left:auto; }
+  .varstats { display:flex; align-items:center; gap:18px; margin-left:auto; flex-wrap:wrap; }
+  .stockhead { display:grid; grid-template-columns:minmax(96px,1fr) 62px 64px 66px; gap:8px; padding:2px 13px 0; font-size:10px; color:#8A8E82; letter-spacing:.06em; }
+  .selstats { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; padding-top:8px; border-top:1px dashed #E5E1D8; }
+
+  /* ---- 移动端 ---- */
+  @media (max-width: 860px) {
+    /* 双栏改为整页单栏滚动: 移动端嵌套滚动容器体验差 */
+    .app { height:auto; min-height:100vh; overflow:visible; }
+    .main { display:block; flex:none; }
+    .left, .right { overflow:visible; }
+    .left { padding:14px 14px 10px; }
+    .right { padding:4px 14px 32px; border-left:none; border-top:1px solid #E5E1D8; }
+    /* 只让总开关吸顶(日期条跟随滚动), 避免两条 sticky 吃掉近 1/4 屏幕 */
+    .masterbar { position:sticky; top:0; z-index:20; gap:8px; padding:9px 14px; }
+    .datebar { gap:8px; padding:8px 14px; }
+    .datebar > span:first-child { display:none; }  /* "快照日期" 标签, 窄屏省略 */
+    /* 翻页控件与快照徽章同行, 日期块单独占第二行 */
+    .datebar > span:last-child { order:2; }
+    .datescroll { order:3; }
+    .masterstats { gap:12px; width:100%; margin-left:0; }
+    .varstats { gap:14px; width:100%; margin-left:0; }
+    .stockrow, .stockhead { grid-template-columns:minmax(0,1fr) 52px 54px 56px; gap:6px; }
+    .stockrow { padding:10px 11px; }
+    .stockhead { padding:2px 11px 0; }
+    .selstats { grid-template-columns:1fr 1fr; }
+    /* 日期条横向滑动, 避免 8 个日期块挤成多行 */
+    .datescroll { overflow-x:auto; flex-wrap:nowrap !important; -webkit-overflow-scrolling:touch; padding-bottom:2px; flex:1 1 100%; min-width:0; }
+    .datescroll::-webkit-scrollbar { height:0; }
+    .datescroll > * { flex:none; }
+  }
+  @media (max-width: 430px) {
+    /* 窄屏: 闸门的数值/状态换行到标题下方, 避免挤压规则文案 */
+    .gate { grid-template-columns:18px minmax(0,1fr); gap:8px; padding:10px 11px; }
+    .gate > :nth-child(3) { grid-column:2; justify-content:flex-start; padding-top:2px; }
+    .selstats { grid-template-columns:1fr; gap:7px; }
+    .masterbar { gap:8px; }
+  }
+  /* 触摸设备去掉 hover 态(移动端 hover 会粘住) */
+  @media (hover: none) {
+    .chip:hover, .tab:hover, .stockrow:hover { border-color:inherit; }
+    .navbtn:hover { background:#FBFAF6; }
+  }
 </style>
 </head>
 <body>
@@ -52,6 +95,16 @@ const EXITS = [
 ];
 const S = { dates:[], di:0, snap:null, ci:0, si:0, exp:{} };
 window.toggleGate = no => { S.exp[no] = !S.exp[no]; render(); };
+// 移动端单栏时明细在个股列表下方, 选中后滚过去
+window.selectStock = si => {
+  S.si = si; render();
+  if (window.innerWidth > 860) return;
+  // 吸顶总开关条高度随文案换行变化, 按实测高度让位
+  const bar = document.querySelector('.masterbar');
+  const top = document.getElementById('detail').getBoundingClientRect().top
+    + window.scrollY - (bar ? bar.offsetHeight : 0) - 8;
+  window.scrollTo({ top, behavior:'smooth' });
+};
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const okSt = g => g.st === 'pass' || g.st === 'na';
 const gatesPass = (v, s) => v.gates.every(okSt) && (s.gates || []).length > 0 && s.gates.every(okSt);
@@ -168,7 +221,7 @@ function render() {
         <div style="font-size:15px;font-weight:700;color:${mc.c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${mc.title}</div>
       </div>
     </div>
-    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-left:auto">
+    <div class="masterstats">
       <div><div class="lbl">中证商品指数</div><div class="mono" style="font-size:14px;font-weight:600">${m.index}</div></div>
       <div><div class="lbl">MA200</div><div class="mono" style="font-size:14px;font-weight:600">${m.ma200}</div></div>
       <div><div class="lbl">偏离</div><div class="mono" style="font-size:14px;font-weight:600;color:${mc.c}">${pct(m.dev_pct)}</div></div>
@@ -182,7 +235,7 @@ function render() {
       <span class="mono" style="min-width:96px;text-align:center;font-size:13.5px;font-weight:600">${snap.date}</span>
       <div class="navbtn" onclick="if(S.di>0)loadDay(S.di-1)">▶</div>
     </div>
-    <div style="display:flex;gap:5px;flex-wrap:wrap">${S.dates.slice(0,8).map((d,i) => `
+    <div class="datescroll" style="display:flex;gap:5px;flex-wrap:wrap">${S.dates.slice(0,8).map((d,i) => `
       <div class="chip mono" onclick="loadDay(${i})" style="background:${i===S.di?'#EAF2EC':'#FBFAF6'};border-color:${i===S.di?'#B9CFC0':'#E5E1D8'};color:${i===S.di?'#2F6B52':'#6E7268'}">${d.slice(5)}</div>`).join('')}
     </div>
     <span style="margin-left:auto;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;${S.di===0
@@ -205,17 +258,17 @@ function render() {
         <span style="padding:2px 8px;border-radius:5px;font-size:10.5px;font-weight:700;background:#fff;border:1px solid #E5E1D8;color:${GRADE[v.grade]}">${v.grade} 级</span>
         <span style="font-size:15px;font-weight:700">${v.name}</span>
         <span class="mono" style="font-size:11px;color:#8A8E82">${v.spot ? esc(v.spot_desc) : esc(v.futures)}</span>
-        <div style="display:flex;align-items:center;gap:18px;margin-left:auto;flex-wrap:wrap">
+        <div class="varstats">
           <div><div class="lbl">商品30日</div><div class="mono" style="font-size:13.5px;font-weight:600;color:${v.meta && v.meta.c30 > 15 ? '#2F6B52' : '#83877B'}">${v.meta && v.meta.c30 != null ? pct(v.meta.c30) : '缺数据'}</div></div>
           <div><div class="lbl">标的数</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.stocks.length}</div></div>
           <div><div class="lbl">仓位上限</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.cap}</div></div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:minmax(96px,1fr) 62px 64px 66px;gap:8px;padding:2px 13px 0;font-size:10px;color:#8A8E82;letter-spacing:.06em">
+      <div class="stockhead">
         <div>${v.name} 板块个股</div><div style="text-align:right">现价</div><div style="text-align:right">今日</div><div style="text-align:right">30日涨幅</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px">${v.stocks.map((s,si) => `
-        <div class="stockrow" onclick="S.si=${si};render()" style="background:${si===S.si?'#fff':'#FBFAF6'};border-color:${si===S.si?'#B9CFC0':'#E9E5DC'};box-shadow:${si===S.si?'0 6px 18px -12px rgba(30,36,28,.28)':'none'}">
+        <div class="stockrow" onclick="selectStock(${si})" style="background:${si===S.si?'#fff':'#FBFAF6'};border-color:${si===S.si?'#B9CFC0':'#E9E5DC'};box-shadow:${si===S.si?'0 6px 18px -12px rgba(30,36,28,.28)':'none'}">
           <div style="display:flex;align-items:center;gap:8px;min-width:0">
             <span style="font-size:13.5px;font-weight:600;white-space:nowrap">${s.name}</span>
             <span class="mono" style="font-size:10.5px;color:#9A9E92;white-space:nowrap">${s.code}</span>
@@ -233,7 +286,7 @@ function render() {
         <span>动力煤、螺纹钢等政策敏感品种不纳入池；同品种优先取 30 日涨幅最小者</span>
       </div>
     </div>
-    <div class="right">
+    <div class="right" id="detail">
       <div style="padding:13px 16px;border-radius:10px;background:#fff;border:1px solid #E5E1D8;display:flex;flex-direction:column;gap:9px">
         <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
           <span style="font-size:16px;font-weight:700">${st.name || ''}</span>
@@ -241,7 +294,7 @@ function render() {
           <span style="font-size:11.5px;color:#8A8E82">${v.name} · ${v.spot ? esc(v.spot_desc) : esc(v.futures)}</span>
           <span class="mono" style="margin-left:auto;padding:4px 11px;border-radius:20px;font-size:12px;font-weight:600;background:${chip.b};color:${chip.c}">${passN}/6</span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;padding-top:8px;border-top:1px dashed #E5E1D8">
+        <div class="selstats">
           <div><div class="lbl">商品30日 / 股价30日</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.meta && v.meta.c30 != null ? pct(v.meta.c30) : '—'} / ${pct(st.s30)}</div></div>
           <div><div class="lbl">滞后差</div><div class="mono" style="font-size:13.5px;font-weight:600">${spread}</div></div>
           <div><div class="lbl">仓位上限</div><div class="mono" style="font-size:13.5px;font-weight:600">${v.cap}</div></div>
